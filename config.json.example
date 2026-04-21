@@ -1,0 +1,19 @@
+{
+  "telegram": {
+    "bot_token": "your_telegram_bot_token_here",
+    "chat_id": "your_chat_id_here"
+  },
+  "users": [
+    {
+      "wallet": "",
+      "alias": "me",
+      "mode": "self"
+    },
+    {
+      "wallet": "",
+      "alias": "",
+      "mode": "whale",
+      "threshold": 500.0
+    }
+  ]
+}
