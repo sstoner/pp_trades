@@ -19,6 +19,7 @@ config_data = load_config()
 
 TELEGRAM_BOT_TOKEN = config_data.get("telegram", {}).get("bot_token")
 TELEGRAM_CHAT_ID = config_data.get("telegram", {}).get("chat_id")
+TELEGRAM_WHALE_CHAT_ID = config_data.get("telegram", {}).get("whale_chat_id")
 
 def parse_users(users_list):
     users_dict = {}
@@ -168,13 +169,14 @@ async def fetch_user_positions(session: aiohttp.ClientSession, user: str, market
             print(f"[Error] Failed to fetch positions for {user}: {response.status}")
             return []
 
-async def send_telegram_message(session: aiohttp.ClientSession, text: str, enable_preview: bool = False):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+async def send_telegram_message(session: aiohttp.ClientSession, text: str, enable_preview: bool = False, chat_id: str = None):
+    target_chat_id = chat_id or TELEGRAM_CHAT_ID
+    if not TELEGRAM_BOT_TOKEN or not target_chat_id:
         print("[Telegram Mock]", text)
         return
     
     payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
+        "chat_id": target_chat_id,
         "text": text,
         "parse_mode": "HTML",
         "disable_web_page_preview": not enable_preview
@@ -272,9 +274,11 @@ async def flush_pending_alerts(session):
         if market_id:
             positions = await fetch_user_positions(session, user_wallet, market_id)
             
+        target_chat_id = TELEGRAM_WHALE_CHAT_ID if config["mode"] == "whale" and TELEGRAM_WHALE_CHAT_ID else TELEGRAM_CHAT_ID
+        
         alert_msg, has_icon = format_alert_message(trade, positions)
         print(f"[{time.strftime('%X')}] Sending aggregated trade(s) for {user_wallet}: {trade.get('title')}")
-        await send_telegram_message(session, alert_msg, enable_preview=has_icon)
+        await send_telegram_message(session, alert_msg, enable_preview=has_icon, chat_id=target_chat_id)
         
         for tx_hash in tx_hashes:
             save_trade(tx_hash, user_wallet, data["timestamp"])
@@ -314,7 +318,7 @@ async def monitor_user(session: aiohttp.ClientSession, user_wallet: str, config:
                     
                 alert_msg, has_icon = format_alert_message(trade, positions)
                 print(f"[{time.strftime('%X')}] Immediate trade detected for {user_wallet}: {trade.get('title')}")
-                await send_telegram_message(session, alert_msg, enable_preview=has_icon)
+                await send_telegram_message(session, alert_msg, enable_preview=has_icon, chat_id=TELEGRAM_CHAT_ID)
                 
                 save_trade(tx_hash, user_wallet, trade.get('timestamp', 0))
                 processing_txs.discard(tx_hash)
