@@ -137,16 +137,19 @@ async def fetch_recent_trades(session: aiohttp.ClientSession, user: str, limit: 
         "_t": int(time.time() * 1000)
     }
     headers = get_browser_headers()
-    async with session.get(ACTIVITY_URL, params=params, headers=headers) as response:
-        if response.status == 200:
-            return await response.json()
-        elif response.status == 429:
-            print(f"[Rate Limit] /activity endpoint for {user}")
-            return []
-        else:
-            print(f"[Error] Failed to fetch activity for {user}: {response.status}")
-            return []
-
+    try:
+        async with session.get(ACTIVITY_URL, params=params, headers=headers) as response:
+            if response.status == 200:
+                return await response.json()
+            elif response.status == 429:
+                print(f"[Rate Limit] /activity endpoint for {user}")
+                return []
+            else:
+                print(f"[Error] Failed to fetch activity for {user}: {response.status}")
+                return []
+    except Exception as e:
+        print(f"[Error] Exception fetching activity for {user}: {e}")
+        return []
 async def fetch_user_positions(session: aiohttp.ClientSession, user: str, market_id: str):
     await api_rate_limiter.wait()
     params = {
@@ -159,16 +162,19 @@ async def fetch_user_positions(session: aiohttp.ClientSession, user: str, market
         "_t": int(time.time() * 1000)
     }
     headers = get_browser_headers()
-    async with session.get(POSITIONS_URL, params=params, headers=headers) as response:
-        if response.status == 200:
-            return await response.json()
-        elif response.status == 429:
-            print(f"[Rate Limit] /positions endpoint for {user}")
-            return []
-        else:
-            print(f"[Error] Failed to fetch positions for {user}: {response.status}")
-            return []
-
+    try:
+        async with session.get(POSITIONS_URL, params=params, headers=headers) as response:
+            if response.status == 200:
+                return await response.json()
+            elif response.status == 429:
+                print(f"[Rate Limit] /positions endpoint for {user}")
+                return []
+            else:
+                print(f"[Error] Failed to fetch positions for {user}: {response.status}")
+                return []
+    except Exception as e:
+        print(f"[Error] Exception fetching positions for {user}: {e}")
+        return []
 async def send_telegram_message(session: aiohttp.ClientSession, text: str, enable_preview: bool = False, chat_id: str = None):
     target_chat_id = chat_id or TELEGRAM_CHAT_ID
     if not TELEGRAM_BOT_TOKEN or not target_chat_id:
@@ -181,9 +187,13 @@ async def send_telegram_message(session: aiohttp.ClientSession, text: str, enabl
         "parse_mode": "HTML",
         "disable_web_page_preview": not enable_preview
     }
-    async with session.post(TELEGRAM_API_URL, json=payload) as response:
-        if response.status != 200:
-            print(f"Failed to send Telegram message: {await response.text()}")
+    
+    try:
+        async with session.post(TELEGRAM_API_URL, json=payload) as response:
+            if response.status != 200:
+                print(f"Failed to send Telegram message: {await response.text()}")
+    except Exception as e:
+        print(f"[Error] Exception sending Telegram message: {e}")
 
 def format_alert_message(trade, positions):
     # Trade format:
