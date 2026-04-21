@@ -68,6 +68,24 @@ def is_trade_seen(tx_hash):
         cursor.execute('SELECT 1 FROM seen_trades WHERE tx_hash = ?', (tx_hash,))
         return cursor.fetchone() is not None
 
+def get_browser_headers():
+    return {
+        "accept": "application/json, text/plain, */*",
+        "accept-language": "en-GB,en-US;q=0.9,en;q=0.8",
+        "cache-control": "no-cache",
+        "pragma": "no-cache",
+        "origin": "https://polymarket.com",
+        "priority": "u=1, i",
+        "referer": "https://polymarket.com/",
+        "sec-ch-ua": '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-site",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+    }
+
 def save_trade(tx_hash, user_address, timestamp):
     if not tx_hash:
         return
@@ -78,7 +96,37 @@ def save_trade(tx_hash, user_address, timestamp):
         )
         conn.commit()
 
+class RateLimiter:
+    def __init__(self, max_calls, period):
+        self.max_calls = max_calls
+        self.period = period
+        self.timestamps = []
+        self.lock = asyncio.Lock()
+
+    async def wait(self):
+        while True:
+            async with self.lock:
+                now = time.time()
+                # Remove timestamps older than the period
+                self.timestamps = [t for t in self.timestamps if now - t < self.period]
+                
+                # If we have capacity, record the current time and proceed
+                if len(self.timestamps) < self.max_calls:
+                    self.timestamps.append(now)
+                    return
+                
+                # Otherwise, calculate how long to sleep until the oldest timestamp clears
+                sleep_time = self.timestamps[0] + self.period - now
+                
+            # Sleep outside the lock so other tasks aren't blocked from checking
+            if sleep_time > 0:
+                await asyncio.sleep(sleep_time)
+
+# Polymarket General Rate Limit is 1000 req / 10s. We use 950 / 10s to be safe.
+api_rate_limiter = RateLimiter(max_calls=950, period=10.0)
+
 async def fetch_recent_trades(session: aiohttp.ClientSession, user: str, limit: int = 5):
+    await api_rate_limiter.wait()
     params = {
         "limit": limit,
         "sortBy": "TIMESTAMP",
@@ -87,10 +135,7 @@ async def fetch_recent_trades(session: aiohttp.ClientSession, user: str, limit: 
         "type": "TRADE",
         "_t": int(time.time() * 1000)
     }
-    headers = {
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache"
-    }
+    headers = get_browser_headers()
     async with session.get(ACTIVITY_URL, params=params, headers=headers) as response:
         if response.status == 200:
             return await response.json()
@@ -102,6 +147,7 @@ async def fetch_recent_trades(session: aiohttp.ClientSession, user: str, limit: 
             return []
 
 async def fetch_user_positions(session: aiohttp.ClientSession, user: str, market_id: str):
+    await api_rate_limiter.wait()
     params = {
         "sizeThreshold": 1,
         "limit": 100,
@@ -111,7 +157,8 @@ async def fetch_user_positions(session: aiohttp.ClientSession, user: str, market
         "user": user,
         "_t": int(time.time() * 1000)
     }
-    async with session.get(POSITIONS_URL, params=params) as response:
+    headers = get_browser_headers()
+    async with session.get(POSITIONS_URL, params=params, headers=headers) as response:
         if response.status == 200:
             return await response.json()
         elif response.status == 429:
@@ -316,8 +363,8 @@ async def monitor_user(session: aiohttp.ClientSession, user_wallet: str, config:
 async def main():
     init_db()
     print(f"Starting Polymarket Trade Bot... Monitoring {len(USERS)} users.")
-    connector = aiohttp.TCPConnector(limit=10)
-    timeout = aiohttp.ClientTimeout(total=3)
+    connector = aiohttp.TCPConnector(limit=200) # Increased parallel capacity for high freq gathering
+    timeout = aiohttp.ClientTimeout(total=5)
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         # Initialize silently on start to ignore old trades if they aren't in DB
         for user_wallet in USERS.keys():
@@ -337,11 +384,9 @@ async def main():
             # Check for settled trade groups
             await flush_pending_alerts(session)
             
-            # Rate limit constraint / Loop frequency
-            elapsed = time.time() - start_time
-            sleep_time = max(1.0 - elapsed, 0.1) # Minimum 1s frequency
-            
-            await asyncio.sleep(sleep_time)
+            # The polling frequency is governed primarily by the rate limiter bucket now.
+            # We sleep a short 0.1s interval to prevent spinning the CPU when the network is instant.
+            await asyncio.sleep(0.1)
 
 if __name__ == "__main__":
     try:
